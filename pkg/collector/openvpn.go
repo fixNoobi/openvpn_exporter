@@ -1,11 +1,13 @@
 package collector
 
 import (
+	"strconv"
+	"strings"
+
 	"github.com/go-kit/kit/log"
 	"github.com/go-kit/kit/log/level"
-	"github.com/prometheus/client_golang/prometheus"
-
 	"github.com/patrickjahns/openvpn_exporter/pkg/openvpn"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 // OpenVPNCollector collects metrics from openvpn status files
@@ -18,6 +20,7 @@ type OpenVPNCollector struct {
 	BytesReceived         *prometheus.Desc
 	BytesSent             *prometheus.Desc
 	ConnectedSince        *prometheus.Desc
+	LastRef               *prometheus.Desc
 	MaxBcastMcastQueueLen *prometheus.Desc
 	ServerInfo            *prometheus.Desc
 	CollectionError       *prometheus.CounterVec
@@ -58,19 +61,25 @@ func NewOpenVPNCollector(logger log.Logger, openVPNServer []OpenVPNServer, colle
 		BytesReceived: prometheus.NewDesc(
 			prometheus.BuildFQName(namespace, "", "bytes_received"),
 			"Amount of data received via the connection",
-			[]string{"server", "common_name"},
+			[]string{"server", "common_name", "real_ip", "route_ip"},
 			nil,
 		),
 		BytesSent: prometheus.NewDesc(
 			prometheus.BuildFQName(namespace, "", "bytes_sent"),
 			"Amount of data sent via the connection",
-			[]string{"server", "common_name"},
+			[]string{"server", "common_name", "real_ip", "route_ip"},
 			nil,
 		),
 		ConnectedSince: prometheus.NewDesc(
 			prometheus.BuildFQName(namespace, "", "connected_since"),
 			"Unixtimestamp when the connection was established",
-			[]string{"server", "common_name"},
+			[]string{"server", "common_name", "real_ip", "route_ip"},
+			nil,
+		),
+		LastRef: prometheus.NewDesc(
+			prometheus.BuildFQName(namespace, "", "last_ref"),
+			"Unixtimestamp when the connection was established",
+			[]string{"server", "common_name", "real_ip", "route_ip"},
 			nil,
 		),
 		ServerInfo: prometheus.NewDesc(
@@ -82,7 +91,7 @@ func NewOpenVPNCollector(logger log.Logger, openVPNServer []OpenVPNServer, colle
 		CollectionError: prometheus.NewCounterVec(
 			prometheus.CounterOpts{
 				Name: prometheus.BuildFQName(namespace, "", "collection_error"),
-				Help: "Error occurred during collection",
+				Help: "Error occured during collection",
 			},
 			[]string{"server"},
 		),
@@ -99,6 +108,7 @@ func (c *OpenVPNCollector) Describe(ch chan<- *prometheus.Desc) {
 		ch <- c.BytesSent
 		ch <- c.BytesReceived
 		ch <- c.ConnectedSince
+		ch <- c.LastRef
 	}
 	c.CollectionError.Describe(ch)
 }
@@ -142,29 +152,35 @@ func (c *OpenVPNCollector) collect(ovpn OpenVPNServer, ch chan<- prometheus.Metr
 			}
 			if contains(clientCommonNames, client.CommonName) {
 				level.Warn(c.logger).Log(
-					"msg", "duplicate client common name in statusfile - duplicate metric dropped",
+					"msg", "duplicate client common name in statusfile - duplicate metric",
 					"commonName", client.CommonName,
 				)
-				continue
+				client.CommonName = client.CommonName + "_" + strconv.Itoa(countContains(clientCommonNames, client.CommonName))
 			}
 			clientCommonNames = append(clientCommonNames, client.CommonName)
 			ch <- prometheus.MustNewConstMetric(
 				c.BytesReceived,
 				prometheus.GaugeValue,
 				client.BytesReceived,
-				ovpn.Name, client.CommonName,
+				ovpn.Name, client.CommonName, client.RealAddress, client.RouteAddress,
 			)
 			ch <- prometheus.MustNewConstMetric(
 				c.BytesSent,
 				prometheus.GaugeValue,
 				client.BytesSent,
-				ovpn.Name, client.CommonName,
+				ovpn.Name, client.CommonName, client.RealAddress, client.RouteAddress,
 			)
 			ch <- prometheus.MustNewConstMetric(
 				c.ConnectedSince,
 				prometheus.GaugeValue,
 				float64(client.ConnectedSince.Unix()),
-				ovpn.Name, client.CommonName,
+				ovpn.Name, client.CommonName, client.RealAddress, client.RouteAddress,
+			)
+			ch <- prometheus.MustNewConstMetric(
+				c.LastRef,
+				prometheus.GaugeValue,
+				float64(client.LastRef.Unix()),
+				ovpn.Name, client.CommonName, client.RealAddress, client.RouteAddress,
 			)
 		}
 	}
@@ -208,4 +224,14 @@ func contains(list []string, item string) bool {
 		}
 	}
 	return false
+}
+
+func countContains(list []string, item string) int {
+	count := 0
+	for _, e := range list {
+		if strings.Count(e, item) > 0 {
+			count++
+		}
+	}
+	return count
 }

@@ -20,9 +20,11 @@ type GlobalStats struct {
 type Client struct {
 	CommonName     string
 	RealAddress    string
+	RouteAddress   string
 	BytesReceived  float64
 	BytesSent      float64
 	ConnectedSince time.Time
+	LastRef        time.Time
 }
 
 // ServerInfo reflects information that was collected about the server
@@ -117,6 +119,16 @@ func parseStatusV1(reader io.Reader) (*Status, error) {
 				}
 				clients = append(clients, client)
 			}
+		} else if len(fields) == 4 {
+			if fields[0] != "Virtual Address" {
+				client := Client{
+					RouteAddress: parseIP(fields[0]),
+					CommonName:   fields[1],
+					RealAddress:  parseIP(fields[2]),
+					LastRef:      parseTime(fields[3]),
+				}
+				updateClient(clients, client)
+			}
 		}
 	}
 	return &Status{
@@ -125,6 +137,15 @@ func parseStatusV1(reader io.Reader) (*Status, error) {
 		ClientList:  clients,
 		ServerInfo:  ServerInfo{Version: "unknown", Arch: "unknown", AdditionalInfo: "unknown"},
 	}, nil
+}
+
+func updateClient(clients []Client, client Client) {
+	for i, cli := range clients {
+		if cli.RealAddress == client.RealAddress {
+			clients[i].RouteAddress = client.RouteAddress
+			clients[i].LastRef = client.LastRef
+		}
+	}
 }
 
 func parseStatusV2AndV3(reader io.Reader, separator string) (*Status, error) {
